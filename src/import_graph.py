@@ -1,40 +1,9 @@
-
-import os
+"""Importação idempotente: python -m src.import_graph."""
+import math
 import pandas as pd
-from pathlib import Path
-from dotenv import load_dotenv
-from neo4j import GraphDatabase
-from sentence_transformers import SentenceTransformer
-from test_spacy import extrair_relacoes
-
-# --------------------------------------------------
-# 1. CONFIGURAÇÕES
-# --------------------------------------------------
-
-load_dotenv()
-
-URI = os.getenv("NEO4J_URI")
-USERNAME = os.getenv("NEO4J_USERNAME")
-PASSWORD = os.getenv("NEO4J_PASSWORD")
-
-if not all([URI, USERNAME, PASSWORD]):
-    raise ValueError("Verifique as configurações do arquivo .env")
-
-driver = GraphDatabase.driver(
-    URI,
-    auth=(USERNAME, PASSWORD)
-)
-
-ARQUIVO_CSV = Path("data/WA_Fn-UseC_-HR-Employee-Attrition.csv")
-PASTA_DOCUMENTOS = Path("documents")
-
-MODELO_EMBEDDING = "paraphrase-multilingual-MiniLM-L12-v2"
-
-TAMANHO_LOTE = 100
-
-# --------------------------------------------------
-# 2. MAPEAMENTO DAS COLUNAS DOS FUNCIONÁRIOS
-# --------------------------------------------------
+from .config import CSV_FILE, DOCUMENTS, EMBEDDING_DIMENSIONS, create_driver, load_encoder, session_options
+from .extraction import extract_documents
+from .schema import ensure_schema
 
 colunas_funcionario = {
     "EmployeeNumber": "employee_id",
@@ -66,33 +35,6 @@ colunas_funcionario = {
     "YearsWithCurrManager": "years_with_current_manager"
 }
 
-# --------------------------------------------------
-# 3. IMPORTAÇÃO DOS FUNCIONÁRIOS EM LOTES
-# --------------------------------------------------
-
-def salvar_lote_funcionarios(tx, funcionarios):
-
-    query = """
-    UNWIND $funcionarios AS funcionario
-
-    MERGE (e:Employee {employee_id: funcionario.employee_id})
-    SET e += funcionario.propriedades
-
-    MERGE (d:Department {name: funcionario.department})
-    MERGE (j:JobRole {name: funcionario.job_role})
-    MERGE (ef:EducationField {name: funcionario.education_field})
-
-    MERGE (e)-[:WORKS_IN]->(d)
-    MERGE (e)-[:HAS_ROLE]->(j)
-    MERGE (e)-[:EDUCATED_IN]->(ef)
-
-    RETURN count(e) AS total
-    """
-
-    resultado = tx.run(query, funcionarios=funcionarios)
-    return resultado.single()["total"]
-
-
 def preparar_funcionarios(df):
 
     funcionarios = []
@@ -120,183 +62,106 @@ def preparar_funcionarios(df):
     return funcionarios
 
 
-# --------------------------------------------------
-# 4. IMPORTAÇÃO DOS DOCUMENTOS E EMBEDDINGS
-# --------------------------------------------------
-
-def salvar_documento(tx, documento):
-
-    query = """
-    MERGE (d:Document {title: $title})
-
-    SET d.content = $content,
-        d.embedding = $embedding
-
-    RETURN d.title AS title
-    """
-
-    resultado = tx.run(query, **documento)
-    return resultado.single()
-
 
 def preparar_documentos(modelo):
-
-    if not PASTA_DOCUMENTOS.exists():
-        raise FileNotFoundError("Pasta documents não encontrada.")
-
-    arquivos = sorted(PASTA_DOCUMENTOS.glob("*.txt"))
-
-    if not arquivos:
-        raise FileNotFoundError("Nenhum arquivo .txt encontrado.")
-
-    documentos = []
-
-    for arquivo in arquivos:
-
-        conteudo = arquivo.read_text(encoding="utf-8")
-
-        embedding = modelo.encode(
-            conteudo,
-            normalize_embeddings=True
-        ).tolist()
-
-        documentos.append({
-            "title": arquivo.name,
-            "content": conteudo,
-            "embedding": embedding
-        })
-
-    return documentos
+    files = sorted(DOCUMENTS.glob("*.txt"))
+    if not files:
+        raise FileNotFoundError("Nenhum documento .txt encontrado.")
+    documents = []
+    for file in files:
+        content = file.read_text(encoding="utf-8")
+        embedding = modelo.encode(content, normalize_embeddings=True).tolist()
+        if len(embedding) != EMBEDDING_DIMENSIONS or not all(math.isfinite(x) for x in embedding):
+            raise ValueError("Embedding inválido ou dimensão incompatível.")
+        documents.append({"title": file.name, "content": content, "embedding": embedding})
+    return documents
 
 
-# --------------------------------------------------
-# 5. IMPORTAÇÃO DAS RELAÇÕES EXTRAÍDAS
-# --------------------------------------------------
+def salvar_lote_funcionarios(tx, funcionarios):
+    return tx.run("""
+        UNWIND $funcionarios AS f
+        MERGE (e:Employee {employee_id: f.employee_id}) SET e += f.propriedades
+        WITH e, f
+        OPTIONAL MATCH (e)-[old:WORKS_IN|HAS_ROLE|EDUCATED_IN]->()
+        DELETE old
+        WITH DISTINCT e, f
+        MERGE (d:Department {name: f.department})
+        MERGE (j:JobRole {name: f.job_role})
+        MERGE (ef:EducationField {name: f.education_field})
+        MERGE (e)-[:WORKS_IN]->(d)
+        MERGE (e)-[:HAS_ROLE]->(j)
+        MERGE (e)-[:EDUCATED_IN]->(ef)
+        RETURN count(e) AS total
+    """, funcionarios=funcionarios).single()["total"]
+
 
 def salvar_relacao(tx, relacao):
-
-    # Lista de tipos e labels permitidos.
-    tipos_permitidos = ["ACOMPANHA", "AVALIA"]
-    origens_permitidas = ["Department", "Role"]
-
-    tipo = relacao["relacao"]
-    origem_tipo = relacao["origem_tipo"]
-
-    if tipo not in tipos_permitidos:
-        raise ValueError(f"Tipo de relação inválido: {tipo}")
-
-    if origem_tipo not in origens_permitidas:
-        raise ValueError(f"Tipo de origem inválido: {origem_tipo}")
-
-    # Os nomes são escolhidos somente pelas listas permitidas.
-    query = f"""
-    MERGE (origem:{origem_tipo} {{name: $origem}})
-    MERGE (destino:WorkConcept {{name: $destino}})
-    MERGE (doc:Document {{title: $documento}})
-
-    MERGE (origem)-[r:{tipo} {{
-        documento: $documento,
-        evidencia: $evidencia
-    }}]->(destino)
-
-    MERGE (doc)-[:MENTIONS]->(destino)
-
-    RETURN origem.name AS origem,
-           type(r) AS relacao,
-           destino.name AS destino,
-           doc.title AS documento
-    """
-
-    resultado = tx.run(
-        query,
-        origem=relacao["origem"],
-        destino=relacao["destino"],
-        documento=relacao["documento"],
-        evidencia=relacao["evidencia"]
-    )
-
-    return resultado.single()
+    kind, label = relacao["relacao"], relacao["origem_tipo"]
+    if kind not in {"ACOMPANHA", "AVALIA"} or label not in {"Department", "Role"}:
+        raise ValueError("Tipo de entidade ou relação inválido.")
+    tx.run(f"""
+        MERGE (o:{label} {{name: $origem}})
+        MERGE (c:WorkConcept {{name: $destino}})
+        MATCH (d:Document {{title: $documento}})
+        MERGE (o)-[r:{kind} {{documento: $documento, evidencia: $evidencia}}]->(c)
+        SET r.extracted_by = 'hr_extractor_v1'
+        MERGE (d)-[:MENTIONS]->(o)
+        MERGE (d)-[:MENTIONS]->(c)
+    """, **relacao).consume()
 
 
-# --------------------------------------------------
-# 6. EXECUÇÃO PRINCIPAL
-# --------------------------------------------------
+def salvar_documento(tx, documento, extraction):
+    tx.run("""
+        MERGE (d:Document {title: $title})
+        SET d.content = $content, d.embedding = $embedding
+        WITH d OPTIONAL MATCH (d)-[m:MENTIONS]->() DELETE m
+    """, **documento).consume()
+    # Substitui apenas relações extraídas desta fonte, na mesma transação.
+    tx.run("""
+        MATCH ()-[r:ACOMPANHA|AVALIA]->()
+        WHERE r.documento = $title DELETE r
+    """, title=documento["title"]).consume()
+    for entity in extraction["entidades"]:
+        label = entity["tipo"]
+        if label not in {"Department", "Role", "WorkConcept"}:
+            raise ValueError("Tipo de entidade inválido.")
+        tx.run(f"""
+            MATCH (d:Document {{title: $title}})
+            MERGE (n:{label} {{name: $name}})
+            MERGE (d)-[:MENTIONS]->(n)
+        """, title=documento["title"], name=entity["nome"]).consume()
+    for relation in extraction["relacoes"]:
+        salvar_relacao(tx, relation)
 
-try:
 
-    driver.verify_connectivity()
-    print("Conexão com Neo4j estabelecida!")
-
-    # Garante unicidade dos documentos.
-    with driver.session() as session:
-
-        session.run("""
-        CREATE CONSTRAINT document_title_unique IF NOT EXISTS
-        FOR (d:Document)
-        REQUIRE d.title IS UNIQUE
-        """)
-
-    # Carrega o modelo de embeddings.
-    print("\nCarregando modelo de embeddings...")
-
-    modelo = SentenceTransformer(MODELO_EMBEDDING)
-
-    # Lê e prepara os documentos.
-    documentos = preparar_documentos(modelo)
-
-    # Lê e prepara os funcionários.
-    df = pd.read_csv(ARQUIVO_CSV)
+def importar(driver=None, modelo=None):
+    # Valida e prepara todas as entradas antes de alterar o banco.
+    df = pd.read_csv(CSV_FILE)
+    required = set(colunas_funcionario) | {"Department", "JobRole", "EducationField"}
+    if required - set(df.columns):
+        raise ValueError(f"Colunas ausentes: {sorted(required - set(df.columns))}")
+    if df[list(required)].isna().any().any() or df.EmployeeNumber.duplicated().any():
+        raise ValueError("CSV com campos ausentes ou identificadores duplicados.")
     funcionarios = preparar_funcionarios(df)
+    extraction = extract_documents()
+    documents = preparar_documentos(modelo if modelo is not None else load_encoder())
+    own_driver = driver is None
+    driver = driver if driver is not None else create_driver()
+    try:
+        driver.verify_connectivity()
+        with driver.session(**session_options()) as session:
+            ensure_schema(session)
+            for start in range(0, len(funcionarios), 100):
+                session.execute_write(salvar_lote_funcionarios, funcionarios[start:start + 100])
+            for document in documents:
+                session.execute_write(salvar_documento, document, extraction[document["title"]])
+        return {"funcionarios": len(funcionarios), "documentos": len(documents),
+                "entidades": sum(len(x["entidades"]) for x in extraction.values()),
+                "relacoes": sum(len(x["relacoes"]) for x in extraction.values())}
+    finally:
+        if own_driver:
+            driver.close()
 
-    # Extrai as relações dos documentos.
-    relacoes = extrair_relacoes()
 
-    print(f"\nDocumentos encontrados: {len(documentos)}")
-    print(f"Funcionários preparados: {len(funcionarios)}")
-    print(f"Relações extraídas: {len(relacoes)}")
-
-    with driver.session() as session:
-
-        # Importa os documentos.
-        print("\nImportando documentos...")
-
-        for documento in documentos:
-            resultado = session.execute_write(
-                salvar_documento,
-                documento
-            )
-            print(f"Documento salvo: {resultado['title']}")
-
-        print("\nImportando relações...")
-
-        for relacao in relacoes:
-            resultado = session.execute_write(
-                salvar_relacao,
-                relacao
-            )
-            print(resultado)
-
-        print("\nImportando funcionários...")
-        total_salvos = 0
-
-        for inicio in range(0, len(funcionarios), TAMANHO_LOTE):
-            lote = funcionarios[inicio:inicio + TAMANHO_LOTE]
-            total = session.execute_write(
-                salvar_lote_funcionarios,
-                lote
-            )
-
-            total_salvos += total
-
-            print(
-                f"Lote processado: "
-                f"{total_salvos}/{len(funcionarios)}"
-            )
-
-        print("\nIMPORTAÇÃO CONCLUÍDA!")
-        print(f"Funcionários processados: {total_salvos}")
-        print(f"Documentos processados: {len(documentos)}")
-        print(f"Relações processadas: {len(relacoes)}")
-
-finally:
-    driver.close()
+if __name__ == "__main__":
+    print(importar())
