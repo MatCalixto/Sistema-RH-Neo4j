@@ -24,11 +24,11 @@ No Windows, `./run.ps1` inicia a interface usando o ambiente disponível. Nesta 
 
 | Tela | Comportamento |
 | --- | --- |
-| Visão geral | Importação, contagens e visualização do grafo |
+| Visão geral | Importação, contagens e grafo interativo com zoom, arraste, filtros, busca e inspeção de conexões |
 | Entidades e relações | Inspeção dos documentos e teste livre com nomes normalizados, offsets e evidências |
 | Busca híbrida | Embeddings multilíngues de 384 dimensões + busca full-text; fusão RRF e posições de cada canal |
 | Múltiplos saltos | Funcionário → departamento → conceito → documento; colegas; conceitos entre áreas; políticas até cargos |
-| Algoritmos | PageRank, comunidades Louvain e caminho mais curto com direção opcional |
+| Algoritmos | PageRank, comunidades Louvain e caminho mais curto interativo com direção opcional |
 
 ## Modelo do grafo
 
@@ -52,7 +52,15 @@ A importação cria constraints e índices `document_vector`/`document_fulltext`
 
 A busca usa a mesma pergunta nos dois canais, sem operadores Lucene do usuário. Combina até 20 candidatos por canal com `RRF = Σ 1/(60 + posição)` e retorna o limite escolhido. O score representa ordenação, não probabilidade. As procedures de busca mantêm compatibilidade com Neo4j 5; versões recentes também oferecem a cláusula SEARCH ([documentação Neo4j](https://neo4j.com/docs/cypher-manual/current/indexes/search-indexes/)).
 
-PageRank usa power iteration com amortecimento 0,85, teletransporte uniforme e redistribuição dos nós sem saída. Louvain usa [NetworkX](https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.community.louvain.louvain_communities.html), grafo não direcionado, resolução ajustável e semente 42. Louvain é a alternativa implementada para Louvain/Leiden. Caminho mais curto usa BFS em arestas de peso unitário. Os algoritmos carregam todos os nós do domínio e suas relações na memória, sem truncamento; a visualização limita a 100 nós. Evidências repetidas do mesmo par não aumentam seu peso. PageRank não mede desempenho de funcionários, e comunidades são agrupamentos estruturais, não classificação de pessoas.
+PageRank usa power iteration com amortecimento 0,85, teletransporte uniforme e redistribuição dos nós sem saída. Louvain usa [NetworkX](https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.community.louvain.louvain_communities.html), grafo não direcionado, resolução ajustável e semente 42. Louvain é a alternativa implementada para Louvain/Leiden. Caminho mais curto usa BFS em arestas de peso unitário. Os algoritmos carregam todos os nós do domínio e suas relações na memória, sem truncamento. Evidências repetidas do mesmo par não aumentam seu peso. PageRank não mede desempenho de funcionários, e comunidades são agrupamentos estruturais, não classificação de pessoas.
+
+### Explorar o grafo
+
+A visualização usa vis-network com os arquivos incluídos no projeto, sem CDN ou Graphviz. Use a roda do mouse ou os botões +/− para zoom, arraste os nós ou o fundo e clique em **Enquadrar** para centralizar. As cores identificam os tipos de entidade; os filtros permitem ocultar tipos. Clique num nó ou aresta para inspecionar suas conexões no painel lateral.
+
+A visão geral exibe inicialmente até 150 nós, priorizando departamentos, cargos, formações, documentos e conceitos. **Máximo de nós** amplia a amostra até o grafo completo. A busca inclui todos os nós carregados, mesmo os que estão fora da amostra; digite um nome ou número, clique em **Localizar** e depois em **Explorar vizinhança** para ver um ou dois saltos. **Visão geral** restaura a vista inicial. Os rótulos das relações aparecem ao selecionar um nó para evitar sobreposição de texto.
+
+O caminho mais curto mostra todos os nós do percurso, na ordem calculada, e apenas as suas arestas. As setas preservam a direção original do grafo; uma linha tracejada indica que a busca percorreu a relação no sentido inverso. O resultado permanece disponível após a atualização da tela até os parâmetros mudarem ou o grafo ser recarregado.
 
 ## Validar
 
@@ -62,6 +70,8 @@ python -m src.test_connection
 python -m src.test_spacy
 python -m src.test_hybrid_search "Como evitar a sobrecarga de trabalho?"
 ```
+
+Os controles JavaScript do grafo também possuem testes sem navegador (Node.js 18+): `node --test tests/graph_view.test.cjs`.
 
 Os testes unitários cobrem extração real (são pulados se spaCy/modelo estiver ausente), RRF, normalização de PageRank, comunidades e caminhos sem conexão. Os testes de integração são opt-in e usam a base já importada:
 

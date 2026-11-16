@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>/* GRAPH_CSS */</style></head>
+<body>
+<main id="graph-app">
+  <header>
+    <div><strong id="heading">Mapa de conexões</strong><span id="counts" aria-live="polite"></span></div>
+    <div class="toolbar">
+      <input id="search" list="node-list" placeholder="Buscar nome ou número do funcionário" aria-label="Buscar nó">
+      <datalist id="node-list"></datalist>
+      <button id="locate">Localizar</button>
+      <button id="reset">Visão geral</button>
+    </div>
+  </header>
+  <div class="filters" id="filters" aria-label="Tipos de nós"></div>
+  <div class="workspace">
+    <section class="canvas-wrap" aria-label="Visualização interativa do grafo">
+      <div id="network" tabindex="0" aria-label="Arraste nós, use a roda para zoom e clique para inspecionar"></div>
+      <div id="loading" role="status">Organizando conexões…</div>
+      <div class="canvas-tools">
+        <button id="zoom-in" aria-label="Aproximar">+</button>
+        <button id="zoom-out" aria-label="Afastar">−</button>
+        <button id="fit">Enquadrar</button>
+        <button id="physics" aria-pressed="false">Ativar movimento</button>
+      </div>
+      <div id="empty" hidden>Nenhum nó com esses filtros.</div>
+    </section>
+    <aside>
+      <span class="eyebrow">INSPECIONAR</span>
+      <h2 id="selection-title">Explore o grafo</h2>
+      <p id="selection-detail">Clique em um nó para ver suas relações. Arraste para organizar e use a roda do mouse para aproximar.</p>
+      <div id="selection-meta"></div>
+      <button id="explore" hidden>Explorar vizinhança</button>
+      <div class="scope-controls" id="scope-controls">
+        <label>Saltos da vizinhança<select id="depth"><option value="1">1 salto</option><option value="2">2 saltos</option></select></label>
+        <label>Máximo de nós<select id="limit"><option value="150">150 nós</option><option value="300">300 nós</option><option value="600">600 nós</option><option value="0">Todos</option></select></label>
+      </div>
+      <h3 id="relations-heading" hidden>Conexões</h3><div id="neighbors"></div>
+    </aside>
+  </div>
+  <footer><span id="hint">Clique: inspecionar · Arraste: mover · Roda: zoom</span><span id="status" role="status"></span></footer>
+</main>
+<script>/* VIS_LIBRARY */</script>
+<script type="application/json" id="graph-data">/* GRAPH_DATA */</script>
+<script>/* GRAPH_JS */</script>
+</body></html>

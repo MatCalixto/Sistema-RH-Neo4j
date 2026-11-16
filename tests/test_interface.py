@@ -32,3 +32,21 @@ def test_algorithm_controls_with_local_graph():
     app.button[1].click().run()
     assert not app.error and not app.exception
     assert app.metric[0].value == "1"
+    assert len(app.get("iframe")) == 1
+    # O resultado não desaparece quando o Streamlit executa a tela novamente.
+    app.run()
+    assert len(app.get("iframe")) == 1
+
+
+def test_overview_graph_persists_on_rerun():
+    import networkx as nx
+    graph = nx.DiGraph()
+    graph.add_node("4:db:1", name="Área", labels=["Department"])
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=60).run()
+    app.session_state["overview_graph"] = graph
+    app.run()
+    assert not app.exception and not app.error
+    assert app.metric[0].value == "1"
+    assert len(app.get("iframe")) == 1
+    app.run()
+    assert len(app.get("iframe")) == 1

@@ -1,12 +1,12 @@
 """Interface local: streamlit run app.py."""
 import streamlit as st
-import graphviz
 from src.config import create_driver, load_encoder
 from src.extraction import extract_documents, extract_text
 from src.import_graph import importar
 from src.search import hybrid_search
 from src.graph_queries import QUERIES, multi_hop
 from src.algorithms import load_graph, pagerank, louvain, shortest_path
+from src.graph_view import graph_view
 
 st.set_page_config(page_title="HR Intelligence", page_icon="🕸️", layout="wide")
 st.title("HR Intelligence")
@@ -27,22 +27,6 @@ def database():
 @st.cache_resource
 def encoder():
     return load_encoder()
-
-
-def graph_view(graph, nodes=None, limit=100):
-    chosen = list(graph if nodes is None else nodes)
-    if len(chosen) > limit:
-        st.caption(f"Visualização limitada a {limit} nós; os algoritmos usam o grafo completo.")
-    chosen = chosen[:limit]
-    dot = graphviz.Digraph()
-    dot.attr(rankdir="LR")
-    for node in chosen:
-        attrs = graph.nodes[node]
-        dot.node(node, graphviz.escape(str(attrs.get("name", node))),
-                 tooltip=", ".join(attrs.get("labels", [])))
-    for a, b, attrs in graph.subgraph(chosen).edges(data=True):
-        dot.edge(a, b, graphviz.escape(attrs.get("type", "")))
-    st.graphviz_chart(dot)
 
 
 page = st.sidebar.radio("Explorar", ["Visão geral", "Entidades e relações", "Busca híbrida",
@@ -77,14 +61,19 @@ try:
                 report = importar(database(), encoder())
             st.success("Importação concluída.")
             st.json(report)
+            for key in ("overview_graph", "graph", "shortest_result"):
+                st.session_state.pop(key, None)
         if st.button("Carregar resumo e grafo"):
-            graph = load_graph(database())
+            st.session_state.overview_graph = load_graph(database())
+        graph = st.session_state.get("overview_graph")
+        if graph is not None:
             a, b = st.columns(2)
             a.metric("Nós", len(graph))
             b.metric("Conexões", graph.number_of_edges())
             if not graph:
                 st.info("O grafo está vazio. Importe os dados primeiro.")
             else:
+                st.caption("Busque qualquer nó do grafo, filtre por tipo ou explore sua vizinhança. A amostra inicial pode ser ampliada em Máximo de nós.")
                 graph_view(graph)
     elif page == "Busca híbrida":
         st.subheader("Encontre políticas por significado e palavras")
@@ -120,6 +109,7 @@ try:
         st.caption("PageRank segue as direções. Louvain usa conexões sem direção e semente 42. Cada par de nós tem peso 1.")
         if st.button("Carregar / atualizar grafo"):
             st.session_state.graph = load_graph(database())
+            st.session_state.pop("shortest_result", None)
         graph = st.session_state.get("graph")
         if graph is None:
             st.info("Carregue o grafo para iniciar.")
@@ -146,11 +136,16 @@ try:
                 directed = st.checkbox("Respeitar direção das relações")
                 if st.button("Encontrar caminho"):
                     result = shortest_path(graph, source, target, directed)
+                    st.session_state.shortest_result = ((source, target, directed), result)
+                saved = st.session_state.get("shortest_result")
+                if saved is not None and saved[0] == (source, target, directed):
+                    result = saved[1]
                     if result["encontrado"]:
                         st.metric("Saltos", result["saltos"])
-                        st.dataframe(result["nos"], use_container_width=True)
-                        st.dataframe(result["arestas"], use_container_width=True)
-                        graph_view(graph, [n["id"] for n in result["nos"]])
+                        graph_view(graph, path=result)
+                        with st.expander("Detalhes dos nós e relações"):
+                            st.dataframe(result["nos"], use_container_width=True)
+                            st.dataframe(result["arestas"], use_container_width=True)
                     else:
                         st.info("Não há caminho entre esses nós na direção escolhida.")
 except Exception as exc:

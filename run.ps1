@@ -5,7 +5,7 @@ $pythonCandidates = @('.venv/Scripts/python.exe', '.runtime_python/python.exe', 
 foreach ($candidate in $pythonCandidates) {
     if ($candidate -ne 'python' -and -not (Test-Path -LiteralPath $candidate)) { continue }
     try {
-        & $candidate -c 'import streamlit, spacy, neo4j, sentence_transformers, networkx, graphviz' 2>$null
+        & $candidate -c 'import streamlit, spacy, neo4j, sentence_transformers, networkx' 2>$null
         $ready = $LASTEXITCODE -eq 0
     } catch { $ready = $false }
     if ($ready) {
